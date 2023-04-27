@@ -1,0 +1,232 @@
+#include "cache.h"
+#include <queue>
+#include <stdint.h>
+
+#define SCORE_MAX 31
+#define ROUND_MAX 100 
+#define DELAY_MAX 60
+
+// struct for each entry of delay queue
+struct Queue_entry{
+public:
+	uint64_t address;
+	uint64_t time; // 64 bit time ??
+	Queue_entry(){
+		address = 0;
+		time = 0;
+	}
+};
+
+
+// RR table consistes of addresses as entries
+class RRtableleft{
+public:
+	uint64_t entries_left[64];	
+
+	RRtableleft(){
+        for(int i = 0; i < 64; i++) entries_left[i] = 0;
+	}
+	void pass_to_RRtableleft(uint64_t addr){
+          uint8_t index = (addr & 63)^((addr >> 6) & 63);
+         entries_left[index] = (addr>>6)&4095;
+	 //entries_left[index] = (addr);
+	}
+	// pass_to_RRtableleft function is to be implemented here which will add the 
+	// entry passed as an argument to the current entries in the left abnk of the RR table
+
+	bool check(uint64_t addr){
+        uint8_t index = (addr & 63)^((addr >> 6) & 63);
+      if( entries_left[index] ==  ((addr>>6)&4095)) return true;
+	  // if( entries_left[index] ==  (addr)) return true;
+	   return false;
+	}
+
+};
+
+class RRtableright{
+public:
+	public:
+	uint64_t entries_right[64];
+
+	RRtableright(){
+        for(int i = 0; i < 64; i++) entries_right[i] = 0;
+	}
+
+	// a function for adding entries to right bank, taking arguments as addr and offset
+	// this function should be called in the l2c_prefetcher_cache_fill function below 
+	void add_entry_right(uint64_t addr){
+        uint8_t index = (addr & 63)^((addr >> 6) & 63);
+        //entries_right[index] = (addr >> 6) & 4095;  
+        entries_right[index] = (addr);
+	}
+        bool check(uint64_t adrr){
+        uint8_t index = (adrr & 63)^((adrr >> 6) & 63);
+          // if(entries_right[index]==((adrr >> 6) & 4095)) return true;
+           if(entries_right[index]==(adrr)) return true;
+           return false;
+        }
+
+};
+
+
+class Bestoffset{
+      public:
+      
+      int current_offset; // present going value.
+      int max_till_now; // maximum value till now.
+      int max_offset_index; // maximum index.
+      int scores[98]; // as given in the paper, considering 46 values.
+      int round;
+      int iter;
+      
+      Bestoffset(){
+        iter = -1;
+      	 current_offset = 1;
+      	 max_till_now = 0;
+      	 for( int i=0; i<98; i++){     	 
+      	 	scores[i] = 0;
+      	 }
+      	 max_offset_index = 1; 
+      	 round = 0;    
+      }
+	
+	void reset(){
+		round = 0;
+		max_till_now = 0;
+         	for( int i=0; i<98; i++){
+                	scores[i] = 0;
+        	 }
+
+	}
+};
+
+Bestoffset bestoffset;
+RRtableleft our_left;
+RRtableright our_right;
+
+class Delay_Queue{
+public:
+        queue <struct Queue_entry> queue1;
+        // uint64_t *queue;
+        // uint64_t *time_queue;        // storing times corresponding to each address
+        uint8_t current_fill_count;             // denoting current number of fu=illed entries in the queue
+        uint64_t current_clock; // 64 bit clock ?
+
+        Delay_Queue(){
+                // constructor
+                //queue1.address = 0;
+                //queue1.time = 0;
+                current_fill_count = 0;         // initial fill count is 0 i.e, empty delay queue
+                current_clock = 0;
+        }
+
+        void fill_queue(uint64_t addr){
+                // prefetch request addr+offset issued then filling the entry into the delay queue
+                // time_to_live is passed but can be 60 according to the data given
+                // present_count is to be found somehow
+                uint64_t present_count;
+                uint64_t lo, hi;//test;
+        __asm__ __volatile__("rdtsc" : "=a"(lo), "=d" (hi));
+               present_count = ((uint64_t)hi <<32 ) | lo;
+
+                uint64_t difference = present_count - current_clock;
+                Queue_entry temp;
+		temp.time = present_count;
+		temp.address = addr;
+		queue1.push(temp);
+
+                current_fill_count++;
+                queue <struct Queue_entry> copy_queue,final_queue;
+                copy_queue = queue1;
+               
+                while(!copy_queue.empty()){
+                        struct Queue_entry temp;
+                        temp.address = copy_queue.front().address;
+                        temp.time = copy_queue.front().time + difference;
+                        if (temp.time < DELAY_MAX) final_queue.push(temp);      // checking for the max_time i.e, 60 cycles here
+                        else{ current_fill_count--;       // one entry removed hence count decreased by 1
+                                our_left.pass_to_RRtableleft(temp.address);
+                        }
+                        copy_queue.pop();
+                }
+               queue1 = final_queue;
+               
+           
+        
+               
+// is block_2
+              // our_left.pass_to_RRtableleft(addr); // this is a member function of class RRtable, upon calling will add the entry for the given address into the left RRtable bank
+                current_clock = present_count;
+                return;
+        }
+
+};
+
+Delay_Queue arr;
+
+void CACHE::l2c_prefetcher_initialize() {}
+
+uint32_t CACHE::l2c_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint32_t metadata_in)
+{
+
+    bestoffset.iter = (bestoffset.iter+2)%96;
+//    cout << bestoffset.current_offset << " " << bestoffset.max_till_now <<  endl;
+//	for(int i = 0; i < 98; i++){
+//cout <<	bestoffset.scores[i] << " ";
+//} 
+//cout << endl;
+  uint64_t cl_addr = (addr >> LOG2_BLOCK_SIZE) ;
+  arr.fill_queue(cl_addr << LOG2_BLOCK_SIZE);
+   uint64_t pf_address = (cl_addr + bestoffset.current_offset ) << LOG2_BLOCK_SIZE;
+    if (type != LOAD)
+        return metadata_in;
+  prefetch_line(ip, addr, pf_address, FILL_L2, 0);
+   
+  	
+  	uint64_t checkaddress = (cl_addr-(bestoffset.iter)) << LOG2_BLOCK_SIZE;
+  	if ( our_left.check( checkaddress ) || our_right.check( checkaddress )){
+  		
+  		bestoffset.scores[bestoffset.iter] = bestoffset.scores[bestoffset.iter]+1;
+  		if(bestoffset.max_till_now < bestoffset.scores[bestoffset.iter] ){
+  		
+  			bestoffset.max_till_now = bestoffset.scores[bestoffset.iter] ;
+  			bestoffset.max_offset_index =(bestoffset.iter);
+  	        }
+  	        if ( bestoffset.max_till_now == 31){
+  	        	if ( bestoffset.scores[1] == 31 ){
+                    bestoffset.current_offset = 1;
+                }
+  	        	else{
+                    bestoffset.current_offset = bestoffset.max_offset_index;
+                }
+		//	cout << bestoffset.max_till_now << endl;
+  	        	bestoffset.reset();
+			return metadata_in;  	        
+  	        }
+  	}
+
+ if(bestoffset.iter == 95) bestoffset.round++;
+
+  if( bestoffset.round == ROUND_MAX){
+			
+            
+  		    bestoffset.current_offset = bestoffset.max_offset_index;
+			//cout << bestoffset.max_till_now << endl;
+  	        	bestoffset.reset();  
+  }	        
+ 
+  return metadata_in;
+}
+
+uint32_t CACHE::l2c_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+
+  our_right.add_entry_right(((addr >> LOG2_BLOCK_SIZE)+bestoffset.current_offset) << LOG2_BLOCK_SIZE); 
+  return metadata_in;
+}
+
+void CACHE::l2c_prefetcher_final_stats()
+{
+
+}
+

@@ -1,0 +1,242 @@
+
+/*****************************************************
+For the Third Data Prefetching Championship - DPC3
+
+Paper ID: #4
+Instruction Pointer Classifying Prefetcher - IPCP
+
+Authors: 
+Samuel Pakalapati - pakalapatisamuel@gmail.com
+Biswabandan Panda - biswap@cse.iitk.ac.in
+******************************************************/
+
+#include "cache.h"
+
+#define NUM_IP_INDEX_BITS 10
+#define NUM_IP_TAG_BITS 6
+#define NUM_DIST_ENTRIES 1024
+class IP_TRACKER_LLC {
+  public:
+    uint64_t ip_tag;
+    uint16_t ip_valid;
+    uint32_t pref_type;                                     // prefetch class type
+    uint64_t last_address;                                  // last stride sent by metadata
+    int stride; 
+
+    IP_TRACKER_LLC () {
+        ip_tag = 0;
+        ip_valid = 0;
+        last_address = 0;
+        stride = 0;
+    };
+};
+class DIST_PREF {
+    public: 
+        //uint64_t tag;
+        uint32_t dist1;
+        uint32_t dist2;
+        uint8_t last_used;
+        DIST_PREF (){
+            //tag = 0;
+            dist1 = 0;
+            dist2 = 0;
+            last_used = 1;
+        }
+};
+DIST_PREF dist_arr_llc[NUM_CPUS][NUM_DIST_ENTRIES];
+uint64_t prev_dist_llc = 0;
+uint64_t prev_addr_llc = 0;
+uint32_t spec_nl_llc[NUM_CPUS] = {0};
+IP_TRACKER_LLC trackers_llc[NUM_CPUS][1024];
+int update_conf_llc(int stride, int pred_stride, int conf){
+    if(stride == pred_stride){             // use 2-bit saturating counter for confidence
+        conf++;
+        if(conf > 3)
+            conf = 3;
+    } else {
+        conf--;
+        if(conf < 0)
+            conf = 0;
+    }
+
+return conf;
+}
+
+void CACHE::llc_prefetcher_initialize() 
+{
+
+}
+
+uint32_t CACHE::llc_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint32_t metadata_in)
+{
+      PACKET* p;
+    p = new PACKET();
+  uint64_t curr_page = addr >> LOG2_PAGE_SIZE;
+  uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
+  uint64_t cl_offset = (addr >> LOG2_BLOCK_SIZE) & 0x3F;
+  uint16_t ip_tag = (ip >> NUM_IP_INDEX_BITS) & ((1 << NUM_IP_TAG_BITS)-1);
+  int prefetch_degree = 4;
+
+    if(NUM_CPUS == 1){
+        if (MSHR.occupancy < (1*MSHR.SIZE)/2)
+            prefetch_degree = 4;
+        else 
+            prefetch_degree = 3;  
+    } else {                                    // tightening the degree for multi-core
+        prefetch_degree = 2;
+    }
+
+    int stride=0;
+    if(metadata_in & 0b1000000)
+        stride = -1*(metadata_in & 0b111111);
+    else
+        stride = metadata_in & 0b111111;
+
+    int index = ip & ((1 << NUM_IP_INDEX_BITS)-1);
+   if(trackers_llc[cpu][index].ip_tag != ip_tag){              // new/conflict IP
+        if(trackers_llc[cpu][index].ip_valid == 0){             // if valid bit is zero, update with latest IP info
+            trackers_llc[cpu][index].ip_tag = ip_tag;
+            trackers_llc[cpu][index].stride = stride;
+        } else {
+            trackers_llc[cpu][index].ip_valid = 0;                  // otherwise, reset valid bit and leave the previous IP as it is
+        }
+
+        // issue a next line prefetch upon encountering new IP
+        uint64_t pf_address = ((addr>>LOG2_BLOCK_SIZE)+1) << LOG2_BLOCK_SIZE;
+   
+        prefetch_line(ip, addr, pf_address, FILL_LLC, 0);
+        return metadata_in;
+    }
+    else {                                                  // if same IP encountered, set valid bit
+        trackers_llc[cpu][index].ip_valid = 1;
+    } 
+
+    // update the IP table upon receiving metadata from prefetch
+    if(type == PREFETCH){
+        spec_nl_llc[cpu] = metadata_in & 0x1000;
+        trackers_llc[cpu][index].stride = stride;
+    }
+    else{
+         if(cache_hit == 0){
+        int dist = addr >> LOG2_BLOCK_SIZE- prev_addr_llc>> LOG2_BLOCK_SIZE;
+        dist = dist & 1023;
+        uint64_t pf_addr2 = ((addr >> LOG2_BLOCK_SIZE) + dist) << LOG2_BLOCK_SIZE;
+                    p->address = pf_addr2;
+            p->full_addr = pf_addr2;
+
+            int k = check_hit(p);
+            if( k == -1 && dist != 0){
+          
+                prefetch_line(ip, addr, pf_addr2, FILL_LLC, 0);
+
+            }
+           else if ( k != -1){
+                lru_update(get_set(pf_addr2), k);
+
+           }
+        int dist1 = dist_arr_llc[cpu][dist].dist1;
+        int dist2 = dist_arr_llc[cpu][dist].dist2;
+        
+        if(dist1 != 0 ){
+            uint64_t pf_addr = ((addr >> LOG2_BLOCK_SIZE) + dist1) << LOG2_BLOCK_SIZE;
+	                                             p->address = pf_addr;
+            p->full_addr = pf_addr;
+            int k = check_hit(p);
+            if( k == -1  ){
+                prefetch_line(ip, addr, pf_addr, FILL_LLC, 0);
+            }
+           else{
+                lru_update(get_set(pf_addr), k);
+           }
+        }
+        if(dist2 != 0){
+            uint64_t pf_addr = ((addr >> LOG2_BLOCK_SIZE) + dist2) << LOG2_BLOCK_SIZE;
+            p->address = pf_addr;
+            p->full_addr = pf_addr;
+            int k = check_hit(p);
+            if( k == -1 ){
+                prefetch_line(ip, addr, pf_addr, FILL_LLC, 0);
+         
+            }
+           else{
+                lru_update(get_set(pf_addr), k);
+           }
+
+        }
+        
+        uint64_t prev_dist1 = dist_arr_llc[cpu][prev_dist_llc].dist1;
+        uint64_t prev_dist2 = dist_arr_llc[cpu][prev_dist_llc].dist2;
+        
+        if(prev_dist1 == dist){
+            dist_arr_llc[cpu][prev_dist_llc].last_used = 0;
+        }
+        else if(prev_dist2 == dist){
+            dist_arr_llc[cpu][prev_dist_llc].last_used = 1;
+        }
+
+        else{
+            uint8_t lst_used = dist_arr_llc[cpu][prev_dist_llc].last_used;
+            if(lst_used == 1){
+                lst_used = 0;
+                dist_arr_llc[cpu][prev_dist_llc].dist1 = dist;
+            }
+            else{
+                lst_used = 1;
+                dist_arr_llc[cpu][prev_dist_llc].dist2 = dist;
+            }
+        }
+        prev_dist_llc = dist;
+       prev_addr_llc = addr;
+return metadata_in;
+    }
+
+
+
+
+   }
+
+if(trackers_llc[cpu][index].stride != 0){
+    for (int i=0; i<prefetch_degree; i++) {
+        uint64_t pf_address = (cl_addr + (trackers_llc[cpu][index].stride*(i+1))) << LOG2_BLOCK_SIZE;
+        
+        // Check if prefetch address is in same 4 KB page
+        if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
+            break;
+        
+        prefetch_line(ip, addr, pf_address, FILL_LLC,0);
+        // SIG_DP(cout << trackers[cpu][index].stride << ", ");
+    }
+    }
+    else{
+        //cout << addr - last_addr << endl;
+       // last_addr = addr;
+        uint64_t pf_addr = ((addr >> LOG2_BLOCK_SIZE) + 1) << LOG2_BLOCK_SIZE;
+                                                            p->address = pf_addr;
+            p->full_addr = pf_addr;
+            int k = check_hit(p);
+            if( k == -1 ){
+                prefetch_line(ip, addr, pf_addr, FILL_LLC, 0);
+                
+            }
+           else{
+                lru_update(get_set(pf_addr), k);
+           }
+
+    }
+    
+prev_addr_llc = addr;
+
+  return metadata_in;
+}
+
+uint32_t CACHE::llc_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+  return metadata_in;
+}
+
+void CACHE::llc_prefetcher_final_stats()
+{
+
+}
+
+

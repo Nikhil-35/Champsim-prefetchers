@@ -1,0 +1,109 @@
+#include "cache.h"
+uint64_t ghb_llc[NUM_CPUS][6];
+uint8_t max_llc[NUM_CPUS][6];
+uint8_t levels_llc[NUM_CPUS][6][64];
+uint8_t max_llc_present[NUM_CPUS][6];
+uint8_t max_index_llc[NUM_CPUS][6];
+void check_for_stream_llc( uint64_t cl_addr, uint8_t cpu){
+      
+	for( int i=0; i<6; i++){
+	if( cl_addr > ghb_llc[cpu][i] && cl_addr - ghb_llc[cpu][i] <= 32){
+		levels_llc[cpu][i][cl_addr - ghb_llc[cpu][i]+31]++;
+		if( levels_llc[cpu][i][cl_addr - ghb_llc[cpu][i]+31] > max_llc[cpu][i] ){
+			max_llc[cpu][i] = levels_llc[cpu][i][cl_addr - ghb_llc[cpu][i]+31];
+			max_index_llc[cpu][i] = cl_addr - ghb_llc[cpu][i]+31;
+		}
+	}
+	else if ( cl_addr < ghb_llc[cpu][i] && ghb_llc[cpu][i] - cl_addr <= 31 ){
+		int k = ghb_llc[cpu][i] - cl_addr;
+		k = k*-1;
+		levels_llc[cpu][i][k+31]++;
+		if( levels_llc[cpu][i][k+31] > max_llc[cpu][i] ){
+                        max_llc[cpu][i] = levels_llc[cpu][i][k+31];
+                        max_index_llc[cpu][i] = cl_addr - ghb_llc[cpu][i]+31;
+                }
+
+	}
+
+}
+}
+void reset_llc(){
+       for( int c = 0; c < NUM_CPUS; c++){
+
+                for( int i=0; i < 6; i++){
+                        max_llc_present[c][i] = max_llc[c][i];
+                }
+        }
+
+	for( int c = 0; c < NUM_CPUS; c++){
+
+        	for( int i=0; i < 6; i++){
+                	for( int j=0; j < 64; j++){
+                        	levels_llc[c][i][j] = 0;
+                	}
+        	max_llc[c][i] = 1;
+        	max_index_llc[c][i] = i+31;
+       		}
+	}
+}
+
+void CACHE::llc_prefetcher_initialize() 
+{
+	
+}
+int round_llc = 0;
+uint32_t CACHE::llc_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint32_t metadata_in)
+{
+   	if( round_llc % 100 == 0 ) reset_llc();
+       		round_llc ++;
+   if( round_llc == 1 ){
+                       for( int c = 0; c < NUM_CPUS; c++){
+
+                for( int i=0; i < 6; i++){
+                        max_llc_present[c][i] = i+31+1;
+                }
+        }
+
+   }  
+    	uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
+   check_for_stream_llc( cl_addr, cpu);
+ for( int i=0; i < 6; i++){                                        // NL IP
+   uint64_t pf_address = ((addr>>LOG2_BLOCK_SIZE)+max_llc_present[cpu][i]-31) << LOG2_BLOCK_SIZE;  
+  cout << max_llc_present[cpu][i] - 0 << endl;
+       PACKET* p;
+   p = new PACKET();
+   p->address = pf_address;
+   p->full_addr = pf_address;
+   int k = check_hit(p);
+   if( k == -1 ){
+                prefetch_line(ip, addr, pf_address, FILL_LLC, 0);
+   }
+           else{
+                lru_update(get_set(pf_address), k);
+    }
+ }
+    	int ghb_index=0;
+	for(ghb_index = 0; ghb_index < 6; ghb_index++)
+    	if(cl_addr == ghb_llc[cpu][ghb_index])
+        	break;
+	// only update the GHB upon finding a new cl address
+	if(ghb_index == 6){
+		for(ghb_index= 5; ghb_index>0; ghb_index--)
+    			ghb_llc[cpu][ghb_index] = ghb_llc[cpu][ghb_index-1];
+		ghb_llc[cpu][0] = cl_addr;
+	}
+
+
+
+  return metadata_in;
+}
+
+uint32_t CACHE::llc_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+  return metadata_in;
+}
+
+void CACHE::llc_prefetcher_final_stats()
+{
+
+}
