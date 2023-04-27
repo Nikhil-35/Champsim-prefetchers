@@ -14,3 +14,6 @@ change the permissions of two scripts present in ChampSim
 
 then just run
 > ./s3.sh
+
+## Slides
+[Here is the link to the slides we prepared](https://docs.google.com/presentation/d/1zu4fjqaT9B2gJlz7J13vsfb4O7a_Q0ITmP_nQGvoQXA/edit?usp=sharing)]
