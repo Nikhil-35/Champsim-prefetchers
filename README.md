@@ -13,5 +13,4 @@ change the permissions of two scripts present in ChampSim
 > chmod +x bash.sh
 
 then just run
-
 > ./s3.sh
