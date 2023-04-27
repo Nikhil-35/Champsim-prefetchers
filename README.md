@@ -16,4 +16,8 @@ then just run
 > ./s3.sh
 
 ## Slides
-[Here is the link to the slides we prepared](https://docs.google.com/presentation/d/1zu4fjqaT9B2gJlz7J13vsfb4O7a_Q0ITmP_nQGvoQXA/edit?usp=sharing)]
+[Here is the link to the slides we prepared](https://docs.google.com/presentation/d/1zu4fjqaT9B2gJlz7J13vsfb4O7a_Q0ITmP_nQGvoQXA/edit?usp=sharing)
+[MLOP reference](https://dpc3.compas.cs.stonybrook.edu/pdfs/Multi_lookahead.pdf)
+[distance prefetching](https://www.cse.psu.edu/~axs53/csl/papers/isca02.pdf)
+[ISB](https://www.cs.utexas.edu/~lin/papers/micro13.pdf)
+
