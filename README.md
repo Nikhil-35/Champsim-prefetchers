@@ -10,8 +10,8 @@ change the permissions of two scripts present in ChampSim
 
 > chmod +x s3.sh
 
-| chmod +x bash.sh
+> chmod +x bash.sh
 
 then just run
 
-| ./s3.sh
+> ./s3.sh
